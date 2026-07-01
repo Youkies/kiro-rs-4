@@ -339,6 +339,30 @@ async fn refresh_idc_token(
     Ok(new_credentials)
 }
 
+/// 为 CodeWhisperer REST 请求注入 token 类型头。
+///
+/// - API Key 凭据 → `tokentype: API_KEY`
+/// - external_idp（M365/Azure AD）→ `TokenType: EXTERNAL_IDP`（缺失会导致 CodeWhisperer
+///   静默返回空结果或 `Improperly formed request`）
+/// - 其他（social/idc）→ 不加
+fn apply_token_type_header(
+    request: reqwest::RequestBuilder,
+    credentials: &KiroCredentials,
+) -> reqwest::RequestBuilder {
+    if credentials.is_api_key_credential() {
+        request.header("tokentype", "API_KEY")
+    } else if credentials
+        .auth_method
+        .as_deref()
+        .map(|m| m.eq_ignore_ascii_case("external_idp"))
+        .unwrap_or(false)
+    {
+        request.header("TokenType", "EXTERNAL_IDP")
+    } else {
+        request
+    }
+}
+
 /// 刷新 External IdP Token（M365 / Azure AD，public client，无 client_secret）
 ///
 /// 使用 refresh_token grant 对保存在 credentials.token_endpoint 的 Azure AD 端点刷新。
@@ -483,9 +507,7 @@ pub(crate) async fn get_usage_limits(
             .header("Authorization", format!("Bearer {}", token))
             .header("Connection", "close");
 
-        if credentials.is_api_key_credential() {
-            request = request.header("tokentype", "API_KEY");
-        }
+        request = apply_token_type_header(request, credentials);
 
         let response = request.send().await?;
         let status = response.status();
@@ -572,9 +594,7 @@ pub(crate) async fn get_available_models(
             .header("Authorization", format!("Bearer {}", token))
             .header("Connection", "close");
 
-        if credentials.is_api_key_credential() {
-            request = request.header("tokentype", "API_KEY");
-        }
+        request = apply_token_type_header(request, credentials);
 
         let response = request.send().await?;
         let status = response.status();
@@ -649,9 +669,7 @@ async fn fetch_enterprise_profile_arn(
             .header("Connection", "close")
             .body(r#"{"maxResults":10}"#);
 
-        if credentials.is_api_key_credential() {
-            request = request.header("tokentype", "API_KEY");
-        }
+        request = apply_token_type_header(request, credentials);
 
         let response = request.send().await?;
         let status = response.status();
@@ -743,9 +761,7 @@ pub(crate) async fn set_user_preference(
             .header("Connection", "close")
             .json(&body);
 
-        if credentials.is_api_key_credential() {
-            request = request.header("tokentype", "API_KEY");
-        }
+        request = apply_token_type_header(request, credentials);
 
         let response = request.send().await?;
         let status = response.status();
