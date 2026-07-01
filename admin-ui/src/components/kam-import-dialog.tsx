@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useCredentials, useAddCredential, useDeleteCredential } from '@/hooks/use-credentials'
 import { getCredentialBalance, setCredentialDisabled, getProxyPool } from '@/api/credentials'
+import type { AddCredentialRequest } from '@/types/api'
 import { extractErrorMessage, sha256Hex, shouldRollbackImportedCredential } from '@/lib/utils'
 
 interface KamImportDialogProps {
@@ -37,6 +38,9 @@ interface KamAccount {
     authMethod?: string
     provider?: string
     startUrl?: string
+    tokenEndpoint?: string
+    issuerUrl?: string
+    scopes?: string
   }
   machineId?: string
   status?: string
@@ -101,6 +105,9 @@ function normalizeKamAccount(item: unknown): unknown {
     const authMethod = typeof obj.authMethod === 'string' ? obj.authMethod : undefined
     const provider = typeof obj.provider === 'string' ? obj.provider : undefined
     const startUrl = typeof obj.startUrl === 'string' ? obj.startUrl : undefined
+    const tokenEndpoint = typeof obj.tokenEndpoint === 'string' ? obj.tokenEndpoint : undefined
+    const issuerUrl = typeof obj.issuerUrl === 'string' ? obj.issuerUrl : undefined
+    const scopes = typeof obj.scopes === 'string' ? obj.scopes : undefined
 
     return {
       email,
@@ -120,6 +127,9 @@ function normalizeKamAccount(item: unknown): unknown {
         authMethod,
         provider,
         startUrl,
+        tokenEndpoint,
+        issuerUrl,
+        scopes,
       },
     }
   }
@@ -371,11 +381,23 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
         try {
           const clientId = cred.clientId?.trim() || undefined
           const clientSecret = cred.clientSecret?.trim() || undefined
-          const authMethod = clientId && clientSecret ? 'idc' : 'social'
           const provider = cred.provider?.trim() || account.idp?.trim() || undefined
 
+          // authMethod 判断：优先使用原始值，否则自动推断
+          const rawAuthMethod = cred.authMethod?.trim()
+          let authMethod: string
+          if (rawAuthMethod === 'external_idp') {
+            authMethod = 'external_idp'
+          } else if (clientId && clientSecret) {
+            authMethod = 'idc'
+          } else if (rawAuthMethod && rawAuthMethod !== 'social') {
+            authMethod = rawAuthMethod
+          } else {
+            authMethod = 'social'
+          }
+
           // idc 模式下必须同时提供 clientId 和 clientSecret
-          if (authMethod === 'social' && (clientId || clientSecret)) {
+          if (authMethod === 'idc' && (!clientId || !clientSecret)) {
             throw new Error('idc 模式需要同时提供 clientId 和 clientSecret')
           }
 
@@ -389,7 +411,7 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             accessToken: cred.accessToken?.trim() || undefined,
             profileArn: cred.profileArn?.trim() || undefined,
             expiresAt: normalizeExpiresAt(cred.expiresAt),
-            authMethod,
+            authMethod: authMethod as AddCredentialRequest['authMethod'],
             provider,
             authRegion: cred.region?.trim() || undefined,
             clientId,
@@ -398,6 +420,9 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             machineId: account.machineId?.trim() || undefined,
             email: account.email?.trim() || undefined,
             proxyUrl,
+            tokenEndpoint: cred.tokenEndpoint?.trim() || undefined,
+            issuerUrl: cred.issuerUrl?.trim() || undefined,
+            scopes: cred.scopes?.trim() || undefined,
           })
 
           addedCredId = addedCred.credentialId

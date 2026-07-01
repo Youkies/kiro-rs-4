@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::http_client::ProxyConfig;
 use crate::kiro::auth::idc::{self, BUILDER_ID_START_URL};
+use crate::kiro::auth::kiro_sso;
 use crate::kiro::auth::social;
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::kiro::provider::KiroProvider;
@@ -28,9 +29,11 @@ use super::types::{
     PollIdcLoginResponse, ProxyCheckAllResponse, ProxyCheckResponse, ProxyPoolEntry,
     ProxyPoolResponse, QuotaExceededResult, RetryPolicyResponse, SetAccountThrottleConfigRequest,
     SetLoadBalancingModeRequest, SetLogGovernanceConfigRequest, SetRetryPolicyRequest,
-    SetUpdateConfigRequest, StartIdcLoginRequest, StartIdcLoginResponse, StartSocialLoginRequest,
-    StartSocialLoginResponse, UpdateCheckInfo, UpdateConfigResponse, UpdateCredentialRequest,
-    UpdateGlobalConfigRequest, UpdateRefreshTokenRequest,
+    GoConfigFile, ImportGoConfigResponse, SetUpdateConfigRequest, StartIdcLoginRequest,
+    StartIdcLoginResponse, StartKiroSsoRequest, StartKiroSsoResponse, StartSocialLoginRequest,
+    StartSocialLoginResponse, UpdateCheckInfo,
+    UpdateConfigResponse, UpdateCredentialRequest, UpdateGlobalConfigRequest,
+    UpdateRefreshTokenRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -117,6 +120,8 @@ pub struct AdminService {
     idc_sessions: Arc<Mutex<HashMap<String, IdcAuthSession>>>,
     /// 进行中的 Social 登录会话
     social_sessions: Arc<Mutex<HashMap<String, SocialAuthSession>>>,
+    /// 进行中的 Kiro SSO（M365 企业 SSO）登录会话
+    kiro_sso_sessions: Arc<Mutex<HashMap<String, KiroSsoAuthSession>>>,
     /// 请求链路追踪存储（用于日志治理：开关 + 保留天数运行时可改）
     trace_store: Option<crate::admin::trace_db::SharedTraceStore>,
     /// 用量日志记录器（用于日志治理：保留天数运行时可改）
@@ -155,6 +160,18 @@ struct IdcAuthSession {
     proxy: Option<ProxyConfig>,
     /// 重新登录时更新此凭据的 Token（非 None 时更新已有凭据而非创建新凭据）
     relogin_target_id: Option<u64>,
+}
+
+/// Kiro SSO（M365 企业 SSO）登录会话状态
+struct KiroSsoAuthSession {
+    expires_at: DateTime<Utc>,
+    /// 服务器 task 完成时通过此 channel 发送结果
+    completion_rx: tokio::sync::Mutex<
+        tokio::sync::oneshot::Receiver<Result<kiro_sso::KiroSsoResult, String>>,
+    >,
+    cred_template: KiroCredentials,
+    /// 保持服务器存活（Drop 时关闭并释放端口）
+    _server_handle: kiro_sso::SsoServerHandle,
 }
 
 /// 解析自动更新触发时间（`HH:MM`，本地 24 小时制）。允许 `H:M` 简写，
@@ -416,6 +433,7 @@ impl AdminService {
             update_check_cache: Mutex::new(None),
             idc_sessions: Arc::new(Mutex::new(HashMap::new())),
             social_sessions: Arc::new(Mutex::new(HashMap::new())),
+            kiro_sso_sessions: Arc::new(Mutex::new(HashMap::new())),
             trace_store: None,
             usage_recorder: None,
         };
@@ -1017,6 +1035,9 @@ impl AdminService {
             disabled: false, // 新添加的凭据默认启用
             kiro_api_key: req.kiro_api_key,
             endpoint: req.endpoint,
+            token_endpoint: req.token_endpoint,
+            issuer_url: req.issuer_url,
+            scopes: req.scopes,
         };
 
         // 调用 token_manager 添加凭据
@@ -3160,6 +3181,251 @@ impl AdminService {
             expires_at: expires_at.to_rfc3339(),
             poll_interval,
         })
+    }
+    // ── Kiro SSO（M365 企业 SSO）登录 ──────────────────────────────────────────
+
+    /// 发起 Kiro SSO 登录，返回 portal URL
+    ///
+    /// 服务器 task 自主完成双段流（OIDC discovery + token exchange），
+    /// service 只需等待 completion_rx 的结果。
+    pub async fn start_kiro_sso_login(
+        &self,
+        req: StartKiroSsoRequest,
+    ) -> Result<StartKiroSsoResponse, AdminServiceError> {
+        let global_proxy = self.token_manager.proxy();
+        let proxy = req
+            .proxy_url
+            .as_deref()
+            .map(ProxyConfig::new)
+            .or(global_proxy);
+
+        let auth_endpoint = req
+            .auth_endpoint
+            .unwrap_or_else(|| social::KIRO_AUTH_ENDPOINT.to_string());
+
+        let config = Arc::new(self.token_manager.config());
+        let (code_verifier, code_challenge) = social::generate_pkce();
+        let state = Uuid::new_v4().to_string();
+
+        let (port, server_handle, completion_rx) = kiro_sso::start_kiro_sso_server(
+            auth_endpoint,
+            state.clone(),
+            code_verifier,
+            config,
+            proxy.clone(),
+        )
+        .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
+
+        let redirect_uri = format!("http://127.0.0.1:{}", port);
+        let portal_url = social::build_portal_url(&state, &code_challenge, &redirect_uri);
+        let expires_at = Utc::now() + Duration::minutes(10);
+        let session_id = Uuid::new_v4().to_string();
+
+        let cred_template = KiroCredentials {
+            priority: req.priority,
+            email: req.email,
+            proxy_url: req.proxy_url,
+            ..Default::default()
+        };
+
+        let session = KiroSsoAuthSession {
+            expires_at,
+            completion_rx: tokio::sync::Mutex::new(completion_rx),
+            cred_template,
+            _server_handle: server_handle,
+        };
+
+        self.kiro_sso_sessions
+            .lock()
+            .insert(session_id.clone(), session);
+
+        Ok(StartKiroSsoResponse {
+            session_id,
+            portal_url,
+            expires_at: expires_at.to_rfc3339(),
+        })
+    }
+
+    /// 轮询 Kiro SSO 登录状态（non-blocking，前端按固定间隔调用）
+    pub async fn poll_kiro_sso_login(
+        &self,
+        session_id: &str,
+    ) -> Result<PollIdcLoginResponse, AdminServiceError> {
+        use tokio::sync::oneshot::error::TryRecvError;
+
+        enum Outcome {
+            Expired,
+            Pending,
+            Done(Result<kiro_sso::KiroSsoResult, String>),
+        }
+
+        let outcome = {
+            let sessions = self.kiro_sso_sessions.lock();
+            let Some(session) = sessions.get(session_id) else {
+                return Err(AdminServiceError::NotFound { id: 0 });
+            };
+            if Utc::now() >= session.expires_at {
+                Outcome::Expired
+            } else {
+                match session.completion_rx.try_lock() {
+                    Ok(mut rx) => match rx.try_recv() {
+                        Ok(result) => Outcome::Done(result),
+                        Err(TryRecvError::Empty) => Outcome::Pending,
+                        Err(TryRecvError::Closed) => Outcome::Pending,
+                    },
+                    Err(_) => Outcome::Pending,
+                }
+            }
+        };
+
+        match outcome {
+            Outcome::Pending => Ok(PollIdcLoginResponse::Pending),
+            Outcome::Expired => {
+                self.kiro_sso_sessions.lock().remove(session_id);
+                Ok(PollIdcLoginResponse::Expired)
+            }
+            Outcome::Done(result) => {
+                let session = self
+                    .kiro_sso_sessions
+                    .lock()
+                    .remove(session_id)
+                    .ok_or(AdminServiceError::NotFound { id: 0 })?;
+
+                match result {
+                    Err(msg) => Err(AdminServiceError::InternalError(msg)),
+                    Ok(sso_result) => {
+                        let mut new_cred = session.cred_template;
+                        new_cred.auth_method = Some(sso_result.auth_method.clone());
+                        new_cred.access_token = Some(sso_result.access_token);
+                        new_cred.refresh_token = sso_result.refresh_token;
+                        new_cred.expires_at = sso_result
+                            .expires_in
+                            .map(|s| (Utc::now() + Duration::seconds(s)).to_rfc3339());
+
+                        if let Some(email) = sso_result.email {
+                            if new_cred.email.is_none() {
+                                new_cred.email = Some(email);
+                            }
+                        }
+
+                        // external_idp 专用字段
+                        if sso_result.auth_method == "external_idp" {
+                            new_cred.token_endpoint = sso_result.token_endpoint;
+                            new_cred.issuer_url = sso_result.issuer_url;
+                            new_cred.scopes = sso_result.scopes;
+                            new_cred.client_id = sso_result.client_id;
+                        }
+
+                        let credential_id = self
+                            .token_manager
+                            .add_credential(new_cred)
+                            .await
+                            .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
+
+                        tracing::info!(
+                            "Kiro SSO 登录成功 ({})，已添加凭据 #{}",
+                            sso_result.auth_method,
+                            credential_id
+                        );
+                        Ok(PollIdcLoginResponse::Success { credential_id })
+                    }
+                }
+            }
+        }
+    }
+
+    /// 取消 Kiro SSO 登录会话（Drop 句柄释放端口）
+    pub fn cancel_kiro_sso_login(&self, session_id: &str) -> Result<(), AdminServiceError> {
+        let removed = self.kiro_sso_sessions.lock().remove(session_id).is_some();
+        if removed {
+            Ok(())
+        } else {
+            Err(AdminServiceError::NotFound { id: 0 })
+        }
+    }
+
+    // ── Go config.json 导入 ─────────────────────────────────────────────────────
+
+    /// 批量导入 Go 版 Kiro-Go-sso 的 config.json 账号
+    ///
+    /// 自动处理：
+    /// - `expiresAt` Unix 秒 → RFC3339
+    /// - `enabled: false` → `disabled: true`
+    /// - 已禁用账号跳过导入
+    pub async fn import_go_config(
+        &self,
+        config: GoConfigFile,
+    ) -> ImportGoConfigResponse {
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        let mut errors = Vec::new();
+        let mut credential_ids = Vec::new();
+
+        for account in config.accounts {
+            // 跳过明确禁用的账号
+            if account.enabled == Some(false) {
+                skipped += 1;
+                continue;
+            }
+
+            // refresh_token 为空则跳过
+            if account.refresh_token.as_deref().map(|s| s.is_empty()).unwrap_or(true)
+                && account.access_token.is_none()
+            {
+                skipped += 1;
+                continue;
+            }
+
+            // expiresAt：支持 Unix 秒（数字）或 RFC3339 字符串
+            let expires_at = account.expires_at.and_then(|v| match v {
+                serde_json::Value::Number(n) => n.as_i64().map(|secs| {
+                    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+                        .unwrap_or_else(chrono::Utc::now);
+                    dt.to_rfc3339()
+                }),
+                serde_json::Value::String(s) => {
+                    if s.is_empty() { None } else { Some(s) }
+                }
+                _ => None,
+            });
+
+            let cred = KiroCredentials {
+                access_token: account.access_token,
+                refresh_token: account.refresh_token,
+                profile_arn: account.profile_arn,
+                expires_at,
+                auth_method: Some(
+                    account.auth_method.unwrap_or_else(|| "external_idp".to_string())
+                ),
+                provider: account.provider,
+                client_id: account.client_id,
+                region: account.region,
+                machine_id: account.machine_id,
+                email: account.email,
+                subscription_title: account.subscription_title,
+                token_endpoint: account.token_endpoint,
+                issuer_url: account.issuer_url,
+                scopes: account.scopes,
+                ..Default::default()
+            };
+
+            match self.token_manager.add_credential(cred).await {
+                Ok(id) => {
+                    credential_ids.push(id);
+                    imported += 1;
+                }
+                Err(e) => {
+                    errors.push(e.to_string());
+                }
+            }
+        }
+
+        ImportGoConfigResponse {
+            imported,
+            skipped,
+            errors,
+            credential_ids,
+        }
     }
 }
 

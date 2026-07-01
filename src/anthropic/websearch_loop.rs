@@ -22,7 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::kiro::model::events::Event;
-use crate::kiro::model::requests::kiro::KiroRequest;
+use crate::kiro::model::requests::kiro::{InferenceConfig, KiroRequest};
 use crate::kiro::parser::decoder::EventStreamDecoder;
 use crate::kiro::provider::KiroProvider;
 use crate::model::config::ToolCompatibilityMode;
@@ -261,6 +261,10 @@ async fn decode_round(
                 }
                 Event::Metering(m) => credits += m.usage,
                 Event::Exception { exception_type, .. } => {
+                    tracing::warn!(
+                        "上游异常事件 (websearch): exception_type={}",
+                        exception_type
+                    );
                     if exception_type == "ContentLengthExceededException" {
                         stop_reason_override = Some("max_tokens".to_string());
                     }
@@ -333,6 +337,7 @@ async fn run_round(
         conversation_state: conversion.conversation_state,
         profile_arn: None,
         additional_model_request_fields: conversion.additional_model_request_fields,
+        inference_config: InferenceConfig::from_max_tokens(payload.max_tokens),
     };
     let request_body = match serde_json::to_string(&kiro_request) {
         Ok(b) => b,

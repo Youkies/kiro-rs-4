@@ -18,6 +18,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::http_client::{ProxyConfig, build_client};
 use crate::kiro::machine_id;
+use crate::kiro::kiro_version;
 use crate::kiro::model::available_models::ListAvailableModelsResponse;
 use crate::kiro::model::credentials::{
     KiroCredentials, enterprise_fallback_profile_arn, is_enterprise_fallback_profile_arn,
@@ -150,6 +151,8 @@ pub(crate) async fn refresh_token(
         || auth_method.eq_ignore_ascii_case("iam")
     {
         refresh_idc_token(credentials, config, proxy).await
+    } else if auth_method.eq_ignore_ascii_case("external_idp") {
+        refresh_external_idp_token(credentials, config, proxy).await
     } else {
         refresh_social_token(credentials, config, proxy).await
     }
@@ -331,6 +334,94 @@ async fn refresh_idc_token(
     // 同步更新 profile_arn（如果 IdC 响应中包含）
     if let Some(profile_arn) = data.profile_arn {
         new_credentials.profile_arn = Some(profile_arn);
+    }
+
+    Ok(new_credentials)
+}
+
+/// 刷新 External IdP Token（M365 / Azure AD，public client，无 client_secret）
+///
+/// 使用 refresh_token grant 对保存在 credentials.token_endpoint 的 Azure AD 端点刷新。
+async fn refresh_external_idp_token(
+    credentials: &KiroCredentials,
+    config: &Config,
+    proxy: Option<&ProxyConfig>,
+) -> anyhow::Result<KiroCredentials> {
+    use crate::kiro::auth::kiro_sso::validate_external_idp_endpoint;
+
+    tracing::info!("正在刷新 External IdP Token...");
+
+    let refresh_token = credentials.refresh_token.as_ref().unwrap();
+    let token_endpoint = credentials
+        .token_endpoint
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("External IdP 刷新需要 token_endpoint"))?;
+
+    validate_external_idp_endpoint(token_endpoint)?;
+
+    let client_id = credentials
+        .client_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("External IdP 刷新需要 client_id"))?;
+
+    let scopes = credentials
+        .scopes
+        .as_deref()
+        .unwrap_or("openid profile email offline_access");
+
+    let kiro_version = kiro_version::effective(&config.kiro_version);
+    let client = build_client(proxy, 60, config.tls_backend)?;
+
+    let form = [
+        ("grant_type", "refresh_token"),
+        ("client_id", client_id),
+        ("refresh_token", refresh_token.as_str()),
+        ("scope", scopes),
+    ];
+
+    let response = client
+        .post(token_endpoint)
+        .header("User-Agent", format!("KiroIDE-{}", kiro_version))
+        .header("Accept", "application/json")
+        .form(&form)
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+
+        // invalid_grant → token 永久失效
+        if status.as_u16() == 400 && body_text.contains("invalid_grant") {
+            return Err(RefreshTokenInvalidError {
+                message: format!(
+                    "External IdP refreshToken 已失效 (invalid_grant): {}",
+                    body_text
+                ),
+            }
+            .into());
+        }
+
+        bail!(
+            "External IdP Token 刷新失败 {}: {}",
+            status,
+            body_text
+        );
+    }
+
+    let data: crate::kiro::auth::kiro_sso::ExternalIdpTokenResponse =
+        response.json().await?;
+
+    let mut new_credentials = credentials.clone();
+    new_credentials.access_token = Some(data.access_token);
+
+    if let Some(new_refresh_token) = data.refresh_token {
+        new_credentials.refresh_token = Some(new_refresh_token);
+    }
+
+    if let Some(expires_in) = data.expires_in {
+        let expires_at = Utc::now() + Duration::seconds(expires_in);
+        new_credentials.expires_at = Some(expires_at.to_rfc3339());
     }
 
     Ok(new_credentials)

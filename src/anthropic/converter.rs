@@ -1997,6 +1997,7 @@ mod tests {
             conversation_state: result.conversation_state,
             profile_arn: None,
             additional_model_request_fields: result.additional_model_request_fields,
+            inference_config: None,
         };
         let value = serde_json::to_value(request).unwrap();
 

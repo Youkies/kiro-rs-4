@@ -84,6 +84,14 @@ impl KiroEndpoint for CliEndpoint {
 
         if ctx.credentials.is_api_key_credential() {
             req = req.header("tokentype", "API_KEY");
+        } else if ctx
+            .credentials
+            .auth_method
+            .as_deref()
+            .map(|m| m.eq_ignore_ascii_case("external_idp"))
+            .unwrap_or(false)
+        {
+            req = req.header("TokenType", "EXTERNAL_IDP");
         }
         req
     }

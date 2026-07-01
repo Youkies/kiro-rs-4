@@ -239,6 +239,18 @@ pub struct AddCredentialRequest {
     /// 端点名称（可选，未配置时使用 config.defaultEndpoint）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+
+    /// External IdP token endpoint（M365/Azure AD SSO 专用）
+    #[serde(default)]
+    pub token_endpoint: Option<String>,
+
+    /// OIDC issuer URL（M365/Azure AD SSO 专用）
+    #[serde(default)]
+    pub issuer_url: Option<String>,
+
+    /// 空格分隔的 OIDC scopes（M365/Azure AD SSO 专用）
+    #[serde(default)]
+    pub scopes: Option<String>,
 }
 
 fn default_auth_method() -> String {
@@ -985,4 +997,76 @@ impl AdminErrorResponse {
     pub fn internal_error(message: impl Into<String>) -> Self {
         Self::new("internal_error", message)
     }
+}
+
+// ============ Go config.json 导入 ============
+
+/// Go 版 Kiro-Go-sso 的 config.json 账号结构
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoConfigAccount {
+    pub email: Option<String>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub client_id: Option<String>,
+    pub auth_method: Option<String>,
+    pub provider: Option<String>,
+    pub region: Option<String>,
+    /// Unix 秒时间戳
+    pub expires_at: Option<serde_json::Value>,
+    pub machine_id: Option<String>,
+    pub profile_arn: Option<String>,
+    pub token_endpoint: Option<String>,
+    pub issuer_url: Option<String>,
+    pub scopes: Option<String>,
+    pub subscription_title: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Go config.json 整体结构（只取 accounts 字段）
+#[derive(Debug, Deserialize)]
+pub struct GoConfigFile {
+    pub accounts: Vec<GoConfigAccount>,
+}
+
+/// 导入 Go config.json 响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportGoConfigResponse {
+    pub imported: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+    pub credential_ids: Vec<u64>,
+}
+
+// ============ Kiro SSO（M365 / Azure AD 企业 SSO） ============
+
+/// 发起 Kiro SSO 登录请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartKiroSsoRequest {
+    /// 凭据优先级（默认 0）
+    #[serde(default)]
+    pub priority: u32,
+    /// 用户邮箱（可选，登录后自动填充）
+    #[serde(default)]
+    pub email: Option<String>,
+    /// 代理 URL（可选，留空则使用全局代理）
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    /// Kiro auth endpoint（留空用默认）
+    #[serde(default)]
+    pub auth_endpoint: Option<String>,
+}
+
+/// 发起 Kiro SSO 登录响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartKiroSsoResponse {
+    /// 会话 ID
+    pub session_id: String,
+    /// 在浏览器打开的 portal URL（等待 SSO descriptor 后会被 OIDC 重定向到 IdP）
+    pub portal_url: String,
+    /// 会话过期时间（RFC3339）
+    pub expires_at: String,
 }

@@ -47,6 +47,42 @@ pub struct KiroRequest {
     /// with `thinking: { type: "adaptive", display: "summarized" }` in the IDE endpoint path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub additional_model_request_fields: Option<AdditionalModelRequestFields>,
+
+    /// 推理配置（maxTokens / temperature / topP）
+    ///
+    /// 对齐 Go 版 Kiro-Go：不传 `maxTokens` 时，CodeWhisperer 对企业 SSO
+    /// (external_idp) token 会套用较低的默认输出上限（约 6000 tokens），导致长
+    /// 响应被 `ContentLengthExceededException` 截断。显式传入客户端请求的
+    /// max_tokens 可覆盖该默认值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inference_config: Option<InferenceConfig>,
+}
+
+/// CodeWhisperer 推理配置（顶层 `inferenceConfig`，字段 camelCase）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InferenceConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+}
+
+impl InferenceConfig {
+    /// 仅在 max_tokens > 0 时构造，否则返回 None（与 Go 版 `req.MaxTokens > 0` 一致）
+    pub fn from_max_tokens(max_tokens: i32) -> Option<Self> {
+        if max_tokens > 0 {
+            Some(Self {
+                max_tokens: Some(max_tokens),
+                temperature: None,
+                top_p: None,
+            })
+        } else {
+            None
+        }
+    }
 }
 
 /// Top-level container for the AWS Q CodeWhisperer `additionalModelRequestFields`

@@ -17,8 +17,10 @@ use super::{
         SetAccountThrottleConfigRequest, SetDisabledRequest, SetEndpointRequest,
         SetGlobalProxyRequest, SetLoadBalancingModeRequest, SetLogGovernanceConfigRequest,
         SetPriorityRequest, SetRetryPolicyRequest, SetUpdateConfigRequest, StartIdcLoginRequest,
-        StartSocialLoginRequest, SuccessResponse, UpdateAdminKeyRequest, UpdateClientKeyRequest,
-        UpdateCredentialRequest, UpdateGlobalConfigRequest, UpdateRefreshTokenRequest,
+        GoConfigFile, StartKiroSsoRequest, StartSocialLoginRequest, SuccessResponse,
+        UpdateAdminKeyRequest,
+        UpdateClientKeyRequest, UpdateCredentialRequest, UpdateGlobalConfigRequest,
+        UpdateRefreshTokenRequest,
     },
     usage_stats::Range,
 };
@@ -1132,4 +1134,53 @@ pub async fn trace_failure_stats(State(state): State<AdminState>) -> impl IntoRe
         })
         .collect();
     Json(map)
+}
+
+// ── Kiro SSO（M365 企业 SSO）──────────────────────────────────────────────────
+
+/// POST /api/admin/auth/kiro-sso/start
+/// 发起 Kiro SSO 登录（M365 / Azure AD 企业 SSO）
+pub async fn start_kiro_sso_login(
+    State(state): State<AdminState>,
+    Json(payload): Json<StartKiroSsoRequest>,
+) -> impl IntoResponse {
+    match state.service.start_kiro_sso_login(payload).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/auth/kiro-sso/poll/:session_id
+/// 轮询 Kiro SSO 登录状态
+pub async fn poll_kiro_sso_login(
+    State(state): State<AdminState>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    match state.service.poll_kiro_sso_login(&session_id).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/auth/kiro-sso/cancel/:session_id
+/// 取消 Kiro SSO 登录会话并释放端口
+pub async fn cancel_kiro_sso_login(
+    State(state): State<AdminState>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    match state.service.cancel_kiro_sso_login(&session_id) {
+        Ok(_) => Json(SuccessResponse::new("Kiro SSO 会话已取消")).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+// ── Go config.json 导入 ───────────────────────────────────────────────────────
+
+/// POST /api/admin/import/go-config
+/// 批量导入 Go 版 Kiro-Go-sso 的 config.json（直接粘贴整个文件内容）
+pub async fn import_go_config(
+    State(state): State<AdminState>,
+    Json(payload): Json<GoConfigFile>,
+) -> impl IntoResponse {
+    Json(state.service.import_go_config(payload).await)
 }

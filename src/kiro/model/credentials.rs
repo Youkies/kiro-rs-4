@@ -148,6 +148,25 @@ pub struct KiroCredentials {
     /// 端点名必须在启动时注册的端点 registry 中存在。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+
+    /// External IdP OAuth2 token endpoint（M365/Azure AD SSO 专用）
+    ///
+    /// auth_method == "external_idp" 时使用，用于刷新 Azure AD access token。
+    /// 格式：`https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+
+    /// OIDC issuer URL（M365/Azure AD SSO 专用）
+    ///
+    /// auth_method == "external_idp" 时使用，记录登录时的 issuer，用于审计。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer_url: Option<String>,
+
+    /// 空格分隔的 OIDC scopes（M365/Azure AD SSO 专用）
+    ///
+    /// auth_method == "external_idp" 时使用，刷新 token 时携带相同的 scope。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<String>,
 }
 
 /// 判断是否为零（用于跳过序列化）
@@ -191,6 +210,9 @@ impl std::fmt::Debug for KiroCredentials {
             .field("disabled", &self.disabled)
             .field("kiro_api_key", &fmt_redacted(&self.kiro_api_key))
             .field("endpoint", &self.endpoint)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("issuer_url", &self.issuer_url)
+            .field("scopes", &self.scopes)
             .finish()
     }
 }

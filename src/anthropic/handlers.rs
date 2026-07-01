@@ -9,7 +9,7 @@ use crate::admin::trace_db::{SharedTraceStore, TraceAttempt, TraceRecord, TraceS
 use crate::admin::usage_stats::{SharedAggregator, SharedRecorder, UsageRecord};
 use crate::image_resize::RequestImageLimits;
 use crate::kiro::model::events::Event;
-use crate::kiro::model::requests::kiro::KiroRequest;
+use crate::kiro::model::requests::kiro::{InferenceConfig, KiroRequest};
 use crate::kiro::parser::decoder::EventStreamDecoder;
 use crate::token;
 use anyhow::Error;
@@ -739,6 +739,7 @@ pub async fn post_messages(
         conversation_state: conversion_result.conversation_state,
         profile_arn: None,
         additional_model_request_fields: conversion_result.additional_model_request_fields,
+        inference_config: InferenceConfig::from_max_tokens(payload.max_tokens),
     };
 
     let request_body = match serde_json::to_string(&kiro_request) {
@@ -1241,6 +1242,10 @@ async fn handle_non_stream_request(
                             tracing::debug!("metering credits +{:.6}", metering.usage);
                         }
                         Event::Exception { exception_type, .. } => {
+                            tracing::warn!(
+                                "上游异常事件 (non-stream): exception_type={}",
+                                exception_type
+                            );
                             if exception_type == "ContentLengthExceededException" {
                                 stop_reason = "max_tokens".to_string();
                             }
@@ -1636,6 +1641,7 @@ pub async fn post_messages_cc(
         conversation_state: conversion_result.conversation_state,
         profile_arn: None,
         additional_model_request_fields: conversion_result.additional_model_request_fields,
+        inference_config: InferenceConfig::from_max_tokens(payload.max_tokens),
     };
 
     let request_body = match serde_json::to_string(&kiro_request) {

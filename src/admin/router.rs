@@ -8,24 +8,25 @@ use axum::{
 use super::{
     handlers::{
         add_credential, add_proxy, apply_image_update, assign_proxies_round_robin,
-        assign_proxy_to_credential, batch_add_proxies, check_all_proxies, check_proxy,
-        check_rate_limit, check_update, clear_throttle, complete_social_login,
+        assign_proxy_to_credential, batch_add_proxies, cancel_kiro_sso_login, check_all_proxies,
+        check_proxy, check_rate_limit, check_update, clear_throttle, complete_social_login,
         complete_social_relogin, create_client_key, delete_client_key, delete_credential,
         delete_proxy, disable_quota_exceeded, enable_overage_all, export_kam_credentials,
         force_refresh_token, get_account_throttle_config, get_all_credentials,
         get_credential_balance, get_credential_models, get_global_config, get_global_proxy,
         get_load_balancing_mode, get_log_governance_config, get_proxy_pool, get_retry_policy,
         get_runtime_compatibility, get_update_config, list_client_keys, list_traces,
-        poll_idc_login, poll_idc_relogin, poll_social_login, poll_social_relogin,
-        pull_update_image, reset_all_success_count, reset_client_key_stats, reset_failure_count,
-        reset_success_count, rollback_image_update, set_account_throttle_config,
-        set_client_key_disabled, set_credential_disabled, set_credential_endpoint,
-        set_credential_overage, set_credential_priority, set_global_proxy, set_load_balancing_mode,
-        set_log_governance_config, set_proxy_enabled, set_retry_policy, set_update_config,
-        start_idc_login, start_idc_relogin, start_social_login, start_social_relogin,
-        stats_by_credential, stats_by_model, stats_overview, stats_timeseries, trace_failure_stats,
-        update_admin_key, update_api_key, update_client_key, update_credential,
-        update_global_config, update_refresh_token,
+        poll_idc_login, poll_idc_relogin, poll_kiro_sso_login, poll_social_login,
+        poll_social_relogin, pull_update_image, reset_all_success_count, reset_client_key_stats,
+        reset_failure_count, reset_success_count, rollback_image_update,
+        set_account_throttle_config, set_client_key_disabled, set_credential_disabled,
+        set_credential_endpoint, set_credential_overage, set_credential_priority, set_global_proxy,
+        set_load_balancing_mode, set_log_governance_config, set_proxy_enabled, set_retry_policy,
+        set_update_config, start_idc_login, start_idc_relogin, start_kiro_sso_login,
+        start_social_login, start_social_relogin, stats_by_credential, stats_by_model,
+        stats_overview, stats_timeseries, trace_failure_stats, update_admin_key, update_api_key,
+        update_client_key, update_credential, update_global_config, update_refresh_token,
+        import_go_config,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -132,6 +133,16 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route(
             "/auth/social/complete/{session_id}",
             post(complete_social_login),
+        )
+        .route("/import/go-config", post(import_go_config))
+        .route("/auth/kiro-sso/start", post(start_kiro_sso_login))
+        .route(
+            "/auth/kiro-sso/poll/{session_id}",
+            post(poll_kiro_sso_login),
+        )
+        .route(
+            "/auth/kiro-sso/cancel/{session_id}",
+            post(cancel_kiro_sso_login),
         )
         .route(
             "/credentials/{id}/relogin/social/start",

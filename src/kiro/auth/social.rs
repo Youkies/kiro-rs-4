@@ -24,7 +24,7 @@ pub const KIRO_PORTAL_URL: &str = "https://app.kiro.dev";
 pub const KIRO_AUTH_ENDPOINT: &str = "https://prod.us-east-1.auth.desktop.kiro.dev";
 
 /// 与 IDE 一致的本地回调端口候选列表
-const CALLBACK_PORTS: &[u16] = &[
+pub(crate) const CALLBACK_PORTS: &[u16] = &[
     3128, 4649, 6588, 8008, 9091, 49153, 50153, 51153, 52153, 53153,
 ];
 

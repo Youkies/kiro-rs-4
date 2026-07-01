@@ -28,3 +28,14 @@
 .ace-tool/
 .codegraph/
 .claude/
+# 会话记忆目录（本地私有，不入库）
+/.ai_memory/
+# 含真实账号 token 的导出文件（绝对不能提交）
+/kiro-accounts-*.json
+/kiro-rt-*.json
+# 账号提取工具（含 token 的产物风险，仅本地使用）
+/kiro_extract_tool_for_friend_*/
+/kiro_extract_tool_for_friend_*.zip
+# Python 运行缓存
+__pycache__/
+*.pyc

@@ -85,6 +85,15 @@ impl KiroEndpoint for IdeEndpoint {
 
         if ctx.credentials.is_api_key_credential() {
             req = req.header("tokentype", "API_KEY");
+        } else if ctx
+            .credentials
+            .auth_method
+            .as_deref()
+            .map(|m| m.eq_ignore_ascii_case("external_idp"))
+            .unwrap_or(false)
+        {
+            // Azure AD / M365 SSO token 必须携带此头，否则 CodeWhisperer 静默返回空 profile list
+            req = req.header("TokenType", "EXTERNAL_IDP");
         }
         req
     }
