@@ -489,6 +489,24 @@ fn available_models() -> Vec<Model> {
             max_tokens: 64000,
         },
         Model {
+            id: "claude-sonnet-5".to_string(),
+            object: "model".to_string(),
+            created: 1782864000, // Jun 30, 2026
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 5".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
+        Model {
+            id: "claude-sonnet-5-thinking".to_string(),
+            object: "model".to_string(),
+            created: 1782864000, // Jun 30, 2026
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 5 (Thinking)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
+        Model {
             id: "claude-sonnet-4-6".to_string(),
             object: "model".to_string(),
             created: 1771286400, // Feb 17, 2026
@@ -1415,7 +1433,10 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
             || model_lower.contains("4-8")
             || model_lower.contains("4.8")))
         || (model_lower.contains("sonnet")
-            && (model_lower.contains("4-6") || model_lower.contains("4.6")));
+            && (model_lower.contains("4-6")
+                || model_lower.contains("4.6")
+                || model_lower.contains("sonnet-5")
+                || model_lower.contains("sonnet5")));
 
     let thinking_type = if is_native_output_config_model {
         "adaptive"
@@ -2144,5 +2165,30 @@ mod tests {
 
         assert_eq!(req.thinking.unwrap().thinking_type, "adaptive");
         assert_eq!(req.output_config.unwrap().effort, "max");
+    }
+
+    #[test]
+    fn thinking_suffix_sonnet_5_uses_native_adaptive() {
+        // Sonnet 5 应走 native output_config（adaptive），而非旧式 enabled。
+        let mut req: super::super::types::MessagesRequest = serde_json::from_str(
+            r#"{
+            "model": "claude-sonnet-5-thinking-max",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}]
+        }"#,
+        )
+        .unwrap();
+
+        override_thinking_from_model_name(&mut req);
+
+        assert_eq!(req.thinking.unwrap().thinking_type, "adaptive");
+        assert_eq!(req.output_config.unwrap().effort, "max");
+    }
+
+    #[test]
+    fn available_models_include_sonnet_5_variants() {
+        let ids: Vec<String> = available_models().into_iter().map(|m| m.id).collect();
+        assert!(ids.iter().any(|id| id == "claude-sonnet-5"));
+        assert!(ids.iter().any(|id| id == "claude-sonnet-5-thinking"));
     }
 }

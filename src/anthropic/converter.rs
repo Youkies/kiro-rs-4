@@ -181,7 +181,11 @@ pub fn map_model(model: &str) -> Option<String> {
     let model_lower = model.to_lowercase();
 
     if model_lower.contains("sonnet") {
-        if model_lower.contains("4-6") || model_lower.contains("4.6") {
+        // Sonnet 5：上游模型 ID 无小数点（claude-sonnet-5），与 4.x 的 x.y 风格不同。
+        // 先于 4-x 判断，且用词边界避免把 "4-5"/"4.5" 误判为 5。
+        if model_lower.contains("sonnet-5") || model_lower.contains("sonnet5") {
+            Some("claude-sonnet-5".to_string())
+        } else if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
         } else if model_lower.contains("4-5") || model_lower.contains("4.5") {
             Some("claude-sonnet-4.5".to_string())
@@ -215,7 +219,8 @@ pub fn map_model(model: &str) -> Option<String> {
 pub fn get_context_window_size(model: &str) -> i32 {
     match map_model(model) {
         Some(mapped)
-            if mapped == "claude-sonnet-4.6"
+            if mapped == "claude-sonnet-5"
+                || mapped == "claude-sonnet-4.6"
                 || mapped == "claude-opus-4.6"
                 || mapped == "claude-opus-4.7"
                 || mapped == "claude-opus-4.8" =>
@@ -250,8 +255,8 @@ fn native_reasoning_schema(model_id: &str) -> Option<NativeReasoningSchema> {
             path: NativeReasoningSchemaPath::OutputConfig,
             efforts: EFFORTS_WITH_XHIGH,
         }),
-        // Opus 4.6 and Sonnet 4.6 expose the same output_config path but without xhigh.
-        "claude-opus-4.6" | "claude-sonnet-4.6" => Some(NativeReasoningSchema {
+        // Opus 4.6 / Sonnet 4.6 / Sonnet 5 expose the same output_config path but without xhigh.
+        "claude-opus-4.6" | "claude-sonnet-4.6" | "claude-sonnet-5" => Some(NativeReasoningSchema {
             path: NativeReasoningSchemaPath::OutputConfig,
             efforts: EFFORTS_WITHOUT_XHIGH,
         }),
@@ -1704,6 +1709,30 @@ mod tests {
                 .contains("sonnet")
         );
         assert!(map_model("claude-sonnet-4-6").unwrap().contains("sonnet"));
+    }
+
+    #[test]
+    fn test_map_model_sonnet_5() {
+        // 上游模型 ID 无小数点：claude-sonnet-5
+        assert_eq!(
+            map_model("claude-sonnet-5"),
+            Some("claude-sonnet-5".to_string())
+        );
+        assert_eq!(
+            map_model("claude-sonnet-5-thinking"),
+            Some("claude-sonnet-5".to_string())
+        );
+        // 1M 上下文
+        assert_eq!(get_context_window_size("claude-sonnet-5"), 1_000_000);
+        // 不能误伤 4.5 / 4-5（不应被识别成 sonnet-5）
+        assert_eq!(
+            map_model("claude-sonnet-4-5"),
+            Some("claude-sonnet-4.5".to_string())
+        );
+        assert_eq!(
+            map_model("claude-sonnet-4.5"),
+            Some("claude-sonnet-4.5".to_string())
+        );
     }
 
     #[test]
