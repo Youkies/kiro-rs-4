@@ -578,6 +578,9 @@ mod tests {
             disabled: false,
             kiro_api_key: None,
             endpoint: None,
+            token_endpoint: None,
+            issuer_url: None,
+            scopes: None,
         };
 
         let json = creds.to_pretty_json().unwrap();
@@ -847,6 +850,9 @@ mod tests {
             disabled: false,
             kiro_api_key: None,
             endpoint: None,
+            token_endpoint: None,
+            issuer_url: None,
+            scopes: None,
         };
 
         let json = creds.to_pretty_json().unwrap();
@@ -880,6 +886,9 @@ mod tests {
             disabled: false,
             kiro_api_key: None,
             endpoint: None,
+            token_endpoint: None,
+            issuer_url: None,
+            scopes: None,
         };
 
         let json = creds.to_pretty_json().unwrap();
@@ -996,6 +1005,9 @@ mod tests {
             disabled: false,
             kiro_api_key: None,
             endpoint: None,
+            token_endpoint: None,
+            issuer_url: None,
+            scopes: None,
         };
 
         let json = original.to_pretty_json().unwrap();
